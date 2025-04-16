@@ -16,7 +16,6 @@ import calendar
 import json
 import operator
 import os
-import re
 import threading
 from datetime import date, datetime, timedelta
 from urllib.parse import parse_qs
@@ -28,12 +27,13 @@ from django.contrib import messages
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import models, transaction
+from django.db import models
 from django.db.models import F, ProtectedError
 from django.db.models.query import QuerySet
-from django.forms import DateInput, Select
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse, QueryDict
+from django.forms import DateInput, HiddenInput, Select
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as __
@@ -57,17 +57,14 @@ from base.models import (
     Company,
     Department,
     EmailLog,
-    EmployeeShift,
-    EmployeeType,
     JobPosition,
     JobRole,
     RotatingShiftAssign,
     RotatingWorkTypeAssign,
     ShiftRequest,
-    WorkType,
     WorkTypeRequest,
-    clear_messages,
 )
+from base.views import generate_error_report
 from employee.filters import DocumentRequestFilter, EmployeeFilter, EmployeeReGroup
 from employee.forms import (
     BonusPointAddForm,
@@ -94,9 +91,11 @@ from employee.methods.methods import (
     bulk_create_user_import,
     bulk_create_work_info_import,
     bulk_create_work_types,
-    convert_nan,
+    error_data_template,
     get_ordered_badge_ids,
+    process_employee_records,
     set_initial_password,
+    valid_import_file_headers,
 )
 from employee.models import (
     BonusPoint,
@@ -191,7 +190,6 @@ def _check_reporting_manager(request, *args, **kwargs):
     return request.user.employee_get.reporting_manager.exists()
 
 
-# Create your views here.
 @login_required
 def get_language_code(request):
     """
@@ -300,80 +298,80 @@ def employee_view_individual(request, obj_id, **kwargs):
     """
     This method is used to view profile of an employee.
     """
-    employee = Employee.objects.get(id=obj_id)
-    employee_leaves = (
-        employee.available_leave.all() if apps.is_installed("leave") else None
-    )
-    enabled_block_unblock = (
-        AccountBlockUnblock.objects.exists()
-        and AccountBlockUnblock.objects.first().is_enabled
-    )
-    # Retrieve the filtered employees from the session
-    filtered_employee_ids = request.session.get("filtered_employees", [])
-    filtered_employees = Employee.objects.filter(id__in=filtered_employee_ids)
+    # employee = Employee.objects.get(id=obj_id)
+    # employee_leaves = (
+    #     employee.available_leave.all() if apps.is_installed("leave") else None
+    # )
+    # enabled_block_unblock = (
+    #     AccountBlockUnblock.objects.exists()
+    #     and AccountBlockUnblock.objects.first().is_enabled
+    # )
+    # # Retrieve the filtered employees from the session
+    # filtered_employee_ids = request.session.get("filtered_employees", [])
+    # filtered_employees = Employee.objects.filter(id__in=filtered_employee_ids)
 
-    request_ids_str = json.dumps(
-        [
-            instance.id
-            for instance in paginator_qry(
-                filtered_employees, request.GET.get("page")
-            ).object_list
-        ]
-    )
+    # request_ids_str = json.dumps(
+    #     [
+    #         instance.id
+    #         for instance in paginator_qry(
+    #             filtered_employees, request.GET.get("page")
+    #         ).object_list
+    #     ]
+    # )
 
-    # Convert the string to an actual list of integers
-    requests_ids = (
-        ast.literal_eval(request_ids_str)
-        if isinstance(request_ids_str, str)
-        else request_ids_str
-    )
+    # # Convert the string to an actual list of integers
+    # requests_ids = (
+    #     ast.literal_eval(request_ids_str)
+    #     if isinstance(request_ids_str, str)
+    #     else request_ids_str
+    # )
 
-    employee_id = employee.id
-    previous_id = None
-    next_id = None
+    # employee_id = employee.id
+    # previous_id = None
+    # next_id = None
 
-    for index, req_id in enumerate(requests_ids):
-        if req_id == employee_id:
+    # for index, req_id in enumerate(requests_ids):
+    #     if req_id == employee_id:
 
-            if index == len(requests_ids) - 1:
-                next_id = None
-            else:
-                next_id = requests_ids[index + 1]
-            if index == 0:
-                previous_id = None
-            else:
-                previous_id = requests_ids[index - 1]
-            break
+    #         if index == len(requests_ids) - 1:
+    #             next_id = None
+    #         else:
+    #             next_id = requests_ids[index + 1]
+    #         if index == 0:
+    #             previous_id = None
+    #         else:
+    #             previous_id = requests_ids[index - 1]
+    #         break
 
-    context = {
-        "employee": employee,
-        "previous": previous_id,
-        "next": next_id,
-        "requests_ids": requests_ids,
-        "current_date": date.today(),
-        "leave_request_ids": json.dumps([]),
-        "enabled_block_unblock": enabled_block_unblock,
-    }
-    # if the requesting user opens own data
-    if request.user.employee_get == employee:
-        context["user_leaves"] = employee_leaves
-    else:
-        context["employee_leaves"] = employee_leaves
+    # context = {
+    #     "employee": employee,
+    #     "previous": previous_id,
+    #     "next": next_id,
+    #     "requests_ids": requests_ids,
+    #     "current_date": date.today(),
+    #     "leave_request_ids": json.dumps([]),
+    #     "enabled_block_unblock": enabled_block_unblock,
+    # }
+    # # if the requesting user opens own data
+    # if request.user.employee_get == employee:
+    #     context["user_leaves"] = employee_leaves
+    # else:
+    #     context["employee_leaves"] = employee_leaves
 
     return render(
         request,
         "employee/view/individual.html",
-        context,
+        # context,
     )
 
 
 @login_required
 @hx_request_required
-def about_tab(request, obj_id, **kwargs):
+def about_tab(request, pk, **kwargs):
     """
     This method is used to view profile of an employee.
     """
-    employee = Employee.objects.get(id=obj_id)
+    employee = Employee.objects.get(id=pk)
     contracts = employee.contract_set.all() if apps.is_installed("payroll") else None
     employee_leaves = (
         employee.available_leave.all() if apps.is_installed("leave") else None
@@ -391,8 +389,113 @@ def about_tab(request, obj_id, **kwargs):
 
 @login_required
 @hx_request_required
+def allowances_deductions_tab(request, pk):
+    """
+    Retrieve and render the allowances and deductions applicable to an employee.
+
+    This view function retrieves the active contract, basic pay, allowances, and
+    deductions for a specified employee. It filters allowances and deductions
+    based on various conditions, including specific employee assignments and
+    condition-based rules. The results are then rendered in the allowance and
+    deduction tab template.
+    """
+    employee = Employee.objects.get(id=pk)
+    active_contracts = (
+        employee.contract_set.filter(contract_status="active").first()
+        if apps.is_installed("payroll")
+        else None
+    )
+    basic_pay = active_contracts.wage if active_contracts else None
+    employee_allowances = []
+    employee_deductions = []
+    if basic_pay:
+        # Find the applicable allowances for the employee
+        Allowance = get_horilla_model_class(app_label="payroll", model="allowance")
+        specific_allowances = Allowance.objects.filter(specific_employees=employee)
+        conditional_allowances = Allowance.objects.filter(
+            is_condition_based=True
+        ).exclude(exclude_employees=employee)
+        active_employees = Allowance.objects.filter(
+            include_active_employees=True
+        ).exclude(exclude_employees=employee)
+        allowances = specific_allowances | conditional_allowances | active_employees
+        for allowance in allowances:
+            if allowance.is_condition_based:
+                condition_field = allowance.field
+                condition_operator = allowance.condition
+                condition_value = allowance.value.lower().replace(" ", "_")
+                employee_value = dynamic_attr(employee, condition_field)
+                # employee_value = 0
+                operator_func = operator_mapping.get(condition_operator)
+                if employee_value is not None:
+                    condition_value = type(employee_value)(condition_value)
+                    if operator_func(employee_value, condition_value):
+                        employee_allowances.append(allowance)
+            else:
+                employee_allowances.append(allowance)
+            for allowance in employee_allowances:
+                operator_func = operator_mapping.get(allowance.if_condition)
+                condition_value = basic_pay if allowance.if_choice == "basic_pay" else 0
+                if not operator_func(condition_value, allowance.if_amount):
+                    employee_allowances.remove(allowance)
+
+        # Find the applicable deductions for the employee
+        Deduction = get_horilla_model_class(app_label="payroll", model="deduction")
+        specific_deductions = Deduction.objects.filter(
+            specific_employees=employee, is_pretax=True, is_tax=False
+        )
+        conditional_deduction = Deduction.objects.filter(
+            is_condition_based=True, is_pretax=True, is_tax=False
+        ).exclude(exclude_employees=employee)
+        active_employee_deduction = Deduction.objects.filter(
+            include_active_employees=True, is_pretax=True, is_tax=False
+        ).exclude(exclude_employees=employee)
+        deductions = (
+            specific_deductions | conditional_deduction | active_employee_deduction
+        )
+        employee_deductions = list(set(deductions))
+        for deduction in deductions:
+            if deduction.is_condition_based:
+                condition_field = deduction.field
+                condition_operator = deduction.condition
+                condition_value = deduction.value.lower().replace(" ", "_")
+                employee_value = dynamic_attr(employee, condition_field)
+                operator_func = operator_mapping.get(condition_operator)
+
+                if (
+                    employee_value is not None
+                    and not operator_func(
+                        employee_value, type(employee_value)(condition_value)
+                    )
+                    or employee_value is None
+                ):
+                    employee_deductions.remove(deduction)
+    allowance_ids = (
+        json.dumps([instance.id for instance in employee_allowances])
+        if employee_allowances
+        else None
+    )
+    deduction_ids = (
+        json.dumps([instance.id for instance in employee_deductions])
+        if employee_deductions
+        else None
+    )
+    context = {
+        "active_contracts": active_contracts,
+        "basic_pay": basic_pay,
+        "allowances": employee_allowances if employee_allowances else None,
+        "allowance_ids": allowance_ids,
+        "deductions": employee_deductions if employee_deductions else None,
+        "deduction_ids": deduction_ids,
+        "employee": employee,
+    }
+    return render(request, "tabs/allowance_deduction-tab.html", context=context)
+
+
+@login_required
+@hx_request_required
 @owner_can_enter("perms.employee.view_employee", Employee)
-def shift_tab(request, emp_id):
+def shift_tab(request, pk):
     """
     This function is used to view shift tab of an employee in employee individual & profile view.
 
@@ -402,16 +505,16 @@ def shift_tab(request, emp_id):
 
     Returns: return shift-tab template
     """
-    employee = Employee.objects.get(id=emp_id)
-    work_type_requests = WorkTypeRequest.objects.filter(employee_id=emp_id)
+    employee = Employee.objects.get(id=pk)
+    work_type_requests = WorkTypeRequest.objects.filter(employee_id=pk)
     work_type_requests_ids = json.dumps(
         [instance.id for instance in work_type_requests]
     )
-    rshift_assign = RotatingShiftAssign.objects.filter(employee_id=emp_id)
+    rshift_assign = RotatingShiftAssign.objects.filter(employee_id=pk)
     rshift_assign_ids = json.dumps([instance.id for instance in rshift_assign])
-    rwork_type_assign = RotatingWorkTypeAssign.objects.filter(employee_id=emp_id)
+    rwork_type_assign = RotatingWorkTypeAssign.objects.filter(employee_id=pk)
     rwork_type_assign_ids = json.dumps([instance.id for instance in rwork_type_assign])
-    shift_requests = ShiftRequest.objects.filter(employee_id=emp_id)
+    shift_requests = ShiftRequest.objects.filter(employee_id=pk)
     shift_requests_ids = json.dumps([instance.id for instance in shift_requests])
 
     context = {
@@ -423,7 +526,7 @@ def shift_tab(request, emp_id):
         "rwork_type_assign_ids": rwork_type_assign_ids,
         "shift_data": shift_requests,
         "shift_requests_ids": shift_requests_ids,
-        "emp_id": emp_id,
+        "emp_id": pk,
         "employee": employee,
     }
     return render(request, "tabs/shift-tab.html", context=context)
@@ -579,7 +682,7 @@ def document_request_update(request, id):
 @login_required
 @hx_request_required
 @owner_can_enter("horilla_documents.view_document", Employee)
-def document_tab(request, emp_id):
+def document_tab(request, pk):
     """
     This function is used to view documents tab of an employee in employee individual
     & profile view.
@@ -592,12 +695,12 @@ def document_tab(request, emp_id):
     """
 
     form = DocumentUpdateForm(request.POST, request.FILES)
-    documents = Document.objects.filter(employee_id=emp_id)
+    documents = Document.objects.filter(employee_id=pk)
 
     context = {
         "documents": documents,
         "form": form,
-        "emp_id": emp_id,
+        "emp_id": pk,
     }
     return render(request, "tabs/document_tab.html", context=context)
 
@@ -629,6 +732,23 @@ def document_create(request, emp_id):
         "emp_id": emp_id,
     }
     return render(request, "tabs/htmx/document_create_form.html", context=context)
+
+
+def get_notify_field(request):
+    expiry_date = request.GET.get("expiry_date")
+    form = DocumentForm()
+    if not expiry_date:
+        form.fields["notify_before"].widget = HiddenInput()
+        form.fields["notify_before"].label = ""
+    notify_field_html = render_to_string(
+        "cbv/document/notify_field.html",
+        {
+            "form": form,
+            "field_name": "notify_before",
+            "field": form.fields["notify_before"],
+        },
+    )
+    return HttpResponse(notify_field_html)
 
 
 @login_required
@@ -975,17 +1095,13 @@ def employee_view(request):
     view_type = request.GET.get("view")
     previous_data = request.GET.urlencode()
     page_number = request.GET.get("page")
-    selected_company = request.session.get("selected_company")
     error_message = request.session.pop("error_message", None)
-    queryset = (
-        Employee.objects.filter(
-            is_active=True, employee_work_info__company_id=selected_company
-        )
-        if selected_company != "all"
-        else Employee.objects.filter(is_active=True)
-    )
 
-    filter_obj = EmployeeFilter(request.GET, queryset=queryset)
+    queryset = Employee.objects.filter()
+    filter_obj = EmployeeFilter(request.GET, queryset=queryset).qs
+    if request.GET.get("is_active") != "False":
+        filter_obj = filter_obj.filter(is_active=True)
+
     update_fields = BulkUpdateFieldForm()
     data_dict = parse_qs(previous_data)
     get_key_instances(Employee, data_dict)
@@ -998,9 +1114,9 @@ def employee_view(request):
         request,
         "employee_personal_info/employee_view.html",
         {
-            "data": paginator_qry(filter_obj.qs, page_number),
+            "data": paginator_qry(filter_obj, page_number),
             "pd": previous_data,
-            "f": filter_obj,
+            "f": EmployeeFilter(),
             "update_fields_form": update_fields,
             "view_type": view_type,
             "filter_dict": data_dict,
@@ -1879,7 +1995,7 @@ def employee_delete(request, obj_id):
         error_message = _("- {}.".format(model_names_str))
         error_message = str(error_message)
         request.session["error_message"] = error_message
-        return redirect(employee_view)
+        return redirect(reverse("employee-view") + "?error_message=true")
     return HttpResponseRedirect(request.META.get("HTTP_REFERER", f"/view={view}"))
 
 
@@ -1889,11 +2005,13 @@ def employee_bulk_delete(request):
     """
     This method is used to delete set of Employee instances
     """
-    ids = request.POST["ids"]
-    ids = json.loads(ids)
-    for employee_id in ids:
+    ids = json.loads(request.POST.get("ids", "[]"))
+    if not ids:
+        messages.error(request, _("No IDs provided."))
+    deleted_count = 0
+    employees = Employee.objects.filter(id__in=ids).select_related("employee_user_id")
+    for employee in employees:
         try:
-            employee = Employee.objects.get(id=employee_id)
             if apps.is_installed("payroll"):
                 if employee.contract_set.all().exists():
                     contracts = employee.contract_set.all()
@@ -1902,16 +2020,19 @@ def employee_bulk_delete(request):
                             contract.delete()
             user = employee.employee_user_id
             user.delete()
-            messages.success(
-                request, _("%(employee)s deleted.") % {"employee": employee}
-            )
+            deleted_count += 1
         except Employee.DoesNotExist:
             messages.error(request, _("Employee not found."))
         except ProtectedError:
             messages.error(
                 request, _("You cannot delete %(employee)s.") % {"employee": employee}
             )
-
+    if deleted_count > 0:
+        messages.success(
+            request,
+            _("%(deleted_count)s employees deleted.")
+            % {"deleted_count": deleted_count},
+        )
     return JsonResponse({"message": "Success"})
 
 
@@ -1979,7 +2100,7 @@ def employee_archive(request, obj_id):
                     count = count + 1
             if count == 1:
                 messages.error(request, _("You can't archive the last superuser."))
-                return HttpResponse("<script>$('#filterEmployee').click();</script>")
+                return HttpResponse("<script>$('#applyFilter').click();</script>")
 
         result = employee.get_archive_condition()
         if result:
@@ -1993,7 +2114,7 @@ def employee_archive(request, obj_id):
         if key not in request.META.keys():
             return HttpResponseRedirect(request.META.get("HTTP_REFERER", "/"))
         else:
-            return HttpResponse("<script>$('#filterEmployee').click();</script>")
+            return HttpResponse("<script>$('#applyFilter').click();</script>")
     else:
         return render(
             request,
@@ -2423,19 +2544,19 @@ def convert_nan(field, dicts):
     try:
         float(field_value)
         return None
-    except ValueError:
+    except (ValueError, TypeError):
         return field_value
 
 
 @login_required
 @permission_required("employee.add_employee")
-def work_info_import(request):
+def work_info_import_file(request):
     """
-    This method is used to import Employee instances and creates related objects
+    This method is used to return the excel file of import Employee instances
     """
     data_frame = pd.DataFrame(
         columns=[
-            "Badge id",
+            "Badge ID",
             "First Name",
             "Last Name",
             "Phone",
@@ -2450,232 +2571,119 @@ def work_info_import(request):
             "Reporting Manager",
             "Company",
             "Location",
-            "Date joining",
+            "Date Joining",
             "Contract End Date",
             "Basic Salary",
             "Salary Hour",
         ]
     )
-    error_data = {
-        "Badge id": [],
-        "First Name": [],
-        "Last Name": [],
-        "Phone": [],
-        "Email": [],
-        "Gender": [],
-        "Department": [],
-        "Job Position": [],
-        "Job Role": [],
-        "Work Type": [],
-        "Shift": [],
-        "Employee Type": [],
-        "Reporting Manager": [],
-        "Company": [],
-        "Location": [],
-        "Date joining": [],
-        "Contract End Date": [],
-        "Basic Salary": [],
-        "Salary Hour": [],
-        "Email Error": [],
-        "First Name error": [],
-        "Name and Email Error": [],
-        "Phone error": [],
-        "Joining Date Error": [],
-        "Contract Error": [],
-        "Badge ID Error": [],
-        "Basic Salary Error": [],
-        "Salary Hour Error": [],
-        "User ID Error": [],
-    }
 
-    # Export the DataFrame to an Excel file
     response = HttpResponse(content_type="application/ms-excel")
     response["Content-Disposition"] = 'attachment; filename="work_info_template.xlsx"'
     data_frame.to_excel(response, index=False)
-    create_work_info = False
-    if request.POST.get("create_work_info") == "true":
-        create_work_info = True
-
-    if request.method == "POST" and request.FILES.get("file") is not None:
-        total_count = 0
-        error_lists = []
-        success_lists = []
-        error_occured = False
-        file = request.FILES["file"]
-        file_extension = file.name.split(".")[-1].lower()
-        data_frame = (
-            pd.read_csv(file) if file_extension == "csv" else pd.read_excel(file)
-        )
-        work_info_dicts = data_frame.to_dict("records")
-        existing_badge_ids = set(Employee.objects.values_list("badge_id", flat=True))
-        existing_usernames = set(User.objects.values_list("username", flat=True))
-        existing_name_emails = set(
-            Employee.objects.values_list(
-                "employee_first_name", "employee_last_name", "email"
-            )
-        )
-        users = []
-        for work_info in work_info_dicts:
-            error = False
-            try:
-                email = work_info["Email"]
-                phone = work_info["Phone"]
-                first_name = convert_nan("First Name", work_info)
-                last_name = convert_nan("Last Name", work_info)
-                badge_id = work_info["Badge id"]
-                date_joining = work_info["Date joining"]
-                contract_end_date = work_info["Contract End Date"]
-                basic_salary = convert_nan("Basic Salary", work_info)
-                salary_hour = convert_nan("Salary Hour", work_info)
-                pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-
-                try:
-                    if pd.isna(email) or not re.match(pattern, email):
-                        work_info["Email Error"] = f"Invalid Email address"
-                        error = True
-                except:
-                    error = True
-                    work_info["Email Error"] = f"Invalid Email address"
-
-                try:
-                    pd.to_numeric(basic_salary)
-                except ValueError:
-                    work_info["Basic Salary Error"] = f"Basic Salary must be a number"
-                    error = True
-
-                try:
-                    pd.to_numeric(salary_hour)
-                except ValueError:
-                    work_info["Salary Hour Error"] = f"Salary Hour must be a number"
-                    error = True
-
-                if pd.isna(first_name):
-                    work_info["First Name error"] = f"First Name can't be empty"
-                    error = True
-
-                if pd.isna(phone):
-                    work_info["Phone error"] = f"Phone Number can't be empty"
-                    error = True
-
-                name_email_tuple = (first_name, last_name, email)
-                if name_email_tuple in existing_name_emails:
-                    work_info["Name and Email Error"] = (
-                        "An employee with this first name, last name, and email already exists."
-                    )
-                    error = True
-                else:
-                    existing_name_emails.add(name_email_tuple)
-
-                try:
-                    pd.to_datetime(date_joining).date()
-                except:
-                    work_info["Joining Date Error"] = (
-                        f"Invalid Date format. Please use the format YYYY-MM-DD"
-                    )
-                    error = True
-
-                try:
-                    pd.to_datetime(contract_end_date).date()
-                except:
-                    work_info["Contract Error"] = (
-                        f"Invalid Date format. Please use the format YYYY-MM-DD"
-                    )
-                    error = True
-
-                if badge_id in existing_badge_ids:
-                    work_info["Badge ID Error"] = (
-                        f"An Employee with the badge ID already exists"
-                    )
-                    error = True
-                else:
-                    existing_badge_ids.add(badge_id)
-
-                if email in existing_usernames:
-                    work_info["User ID Error"] = (
-                        f"User with the email ID already exists"
-                    )
-                    error = True
-                else:
-                    existing_usernames.add(email)
-
-                if error:
-                    error_lists.append(work_info)
-                else:
-                    success_lists.append(work_info)
-
-            except Exception as e:
-                error_occured = True
-                logger.error(e)
-
-        if create_work_info or not error_lists:
-            try:
-                users = bulk_create_user_import(success_lists)
-                employees = bulk_create_employee_import(success_lists)
-                thread = threading.Thread(
-                    target=set_initial_password, args=(employees,)
-                )
-                thread.start()
-
-                total_count = len(employees)
-                bulk_create_department_import(success_lists)
-                bulk_create_job_position_import(success_lists)
-                bulk_create_job_role_import(success_lists)
-                bulk_create_work_types(success_lists)
-                bulk_create_shifts(success_lists)
-                bulk_create_employee_types(success_lists)
-                bulk_create_work_info_import(success_lists)
-
-            except Exception as e:
-                error_occured = True
-                logger.error(e)
-
-        if error_occured:
-            messages.error(request, "something went wrong....")
-            data_frame = pd.DataFrame(
-                ["The provided titles don't match the default titles."],
-                columns=["Title Error"],
-            )
-
-            error_count = len(error_lists)
-            # Create an HTTP response object with the Excel file
-            response = HttpResponse(content_type="application/ms-excel")
-            response["Content-Disposition"] = 'attachment; filename="ImportError.xlsx"'
-            data_frame.to_excel(response, index=False)
-            response["X-Error-Count"] = error_count
-            return response
-
-        if error_lists:
-            for item in error_lists:
-                for key, value in error_data.items():
-                    if key in item:
-                        value.append(item[key])
-                    else:
-                        value.append(None)
-
-            keys_to_remove = [
-                key
-                for key, value in error_data.items()
-                if all(v is None for v in value)
-            ]
-
-            for key in keys_to_remove:
-                del error_data[key]
-            data_frame = pd.DataFrame(error_data, columns=error_data.keys())
-            error_count = len(error_lists)
-            # Create an HTTP response object with the Excel file
-            response = HttpResponse(content_type="application/ms-excel")
-            response["Content-Disposition"] = 'attachment; filename="ImportError.xlsx"'
-            data_frame.to_excel(response, index=False)
-            response["X-Error-Count"] = error_count
-            return response
-        return JsonResponse(
-            {
-                "Success": "Employees Imported Succefully",
-                "success_count": total_count,
-            }
-        )
-
     return response
+
+
+@login_required
+@hx_request_required
+@permission_required("employee.add_employee")
+def work_info_import(request):
+    if request.method == "GET":
+        return render(request, "employee/employee_import.html")
+
+    if request.method == "POST":
+        file = request.FILES.get("file")
+        if not file:
+            error_message = _("No file uploaded.")
+            return render(
+                request,
+                "employee/employee_import.html",
+                {"error_message": error_message},
+            )
+
+        file_extension = file.name.split(".")[-1].lower()
+
+        try:
+            if file_extension == "csv":
+                data_frame = pd.read_csv(file)
+            elif file_extension in ["xls", "xlsx"]:
+                data_frame = pd.read_excel(file)
+            else:
+
+                error_message = _(
+                    "Unsupported file format. Please upload a CSV or Excel file."
+                )
+                return render(
+                    request,
+                    "employee/employee_import.html",
+                    {"error_message": error_message},
+                )
+
+            valid, error_message = valid_import_file_headers(data_frame)
+            if not valid:
+                return render(
+                    request,
+                    "employee/employee_import.html",
+                    {"error_message": error_message},
+                )
+            success_list, error_list, created_count = process_employee_records(
+                data_frame
+            )
+            if success_list:
+                try:
+                    users = bulk_create_user_import(success_list)
+                    employees = bulk_create_employee_import(success_list)
+                    thread = threading.Thread(
+                        target=set_initial_password, args=(employees,)
+                    )
+                    thread.start()
+
+                    bulk_create_department_import(success_list)
+                    bulk_create_job_position_import(success_list)
+                    bulk_create_job_role_import(success_list)
+                    bulk_create_work_types(success_list)
+                    bulk_create_shifts(success_list)
+                    bulk_create_employee_types(success_list)
+                    bulk_create_work_info_import(success_list)
+
+                except Exception as e:
+                    messages.error(request, _("Error Occured {}").format(e))
+                    logger.error(e)
+
+            path_info = (
+                generate_error_report(
+                    error_list, error_data_template, "EmployeesImportError.xlsx"
+                )
+                if error_list
+                else None
+            )
+
+            context = {
+                "created_count": created_count,
+                "total_count": created_count + len(error_list),
+                "error_count": len(error_list),
+                "model": _("Employees"),
+                "path_info": path_info,
+            }
+            result = render_to_string("import_popup.html", context)
+            result += """
+                        <script>
+                            $('#objectCreateModalTarget').css('max-width', '410px');
+                        </script>
+                    """
+            return HttpResponse(result)
+        except Exception as e:
+            messages.error(
+                request,
+                _(
+                    "Failed to read file. Please ensure it is a valid CSV or Excel file. : {}"
+                ).format(e),
+            )
+            logger.error(f"File import error: {e}")
+            error_message = f"File import error: {e}"
+    return render(
+        request, "employee/employee_import.html", {"error_message": error_message}
+    )
 
 
 @login_required
@@ -2690,9 +2698,19 @@ def work_info_export(request):
             "export_form": EmployeeExportExcelForm(),
         }
         return render(request, "employee_export_filter.html", context)
+
     employees_data = {}
     selected_columns = []
     form = EmployeeExportExcelForm()
+    field_overrides = {
+        "employee_work_info__department_id": "employee_work_info__department_id__department",
+        "employee_work_info__job_position_id": "employee_work_info__job_position_id__job_position",
+        "employee_work_info__job_role_id": "employee_work_info__job_role_id__job_role",
+        "employee_work_info__shift_id": "employee_work_info__shift_id__employee_shift",
+        "employee_work_info__work_type_id": "employee_work_info__work_type_id__work_type",
+        "employee_work_info__reporting_manager_id": "employee_work_info__reporting_manager_id__get_full_name",
+        "employee_work_info__employee_type_id": "employee_work_info__employee_type_id__employee_type",
+    }
     employees = EmployeeFilter(request.GET).qs
     employees = filtersubordinatesemployeemodel(
         request, employees, "employee.view_employee"
@@ -2703,54 +2721,61 @@ def work_info_export(request):
         ids = request.GET.get("ids")
         id_list = json.loads(ids)
         employees = Employee.objects.filter(id__in=id_list)
-    for field in excel_columns:
-        value = field[0]
-        key = field[1]
+
+    prefetch_fields = list(set(f.split("__")[0] for f in selected_fields if "__" in f))
+    if prefetch_fields:
+        employees = employees.select_related(*prefetch_fields)
+
+    for value, key in excel_columns:
         if value in selected_fields:
             selected_columns.append((value, key))
-    for column_value, column_name in selected_columns:
-        nested_attributes = column_value.split("__")
-        employees_data[column_name] = []
-        for employee in employees:
+
+    date_format = "YYYY-MM-DD"
+    user = request.user
+    emp = getattr(user, "employee_get", None)
+    if emp:
+        info = EmployeeWorkInformation.objects.filter(employee_id=emp).first()
+        if info:
+            company = Company.objects.filter(company=info.company_id).first()
+            if company and company.date_format:
+                date_format = company.date_format
+
+    employees_data = {column_name: [] for _, column_name in selected_columns}
+    for employee in employees:
+        for column_value, column_name in selected_columns:
+            if column_value in field_overrides:
+                column_value = field_overrides[column_value]
+
+            nested_attrs = column_value.split("__")
             value = employee
-            for attr in nested_attributes:
+            for attr in nested_attrs:
                 value = getattr(value, attr, None)
                 if value is None:
                     break
+
+            # Call the value if it's employee_work_info__reporting_manager_id__get_full_name
+            if callable(value):
+                try:
+                    value = value()
+                except Exception:
+                    value = ""
+
             data = str(value) if value is not None else ""
 
-            if type(value) == date:
-                user = request.user
-                emp = user.employee_get
-
-                # Taking the company_name of the user
-                info = EmployeeWorkInformation.objects.filter(employee_id=emp)
-                if info.exists():
-                    for i in info:
-                        employee_company = i.company_id
-                    company_name = Company.objects.filter(company=employee_company)
-                    emp_company = company_name.first()
-
-                    # Access the date_format attribute directly
-                    date_format = (
-                        emp_company.date_format if emp_company else "MMM. D, YYYY"
+            if isinstance(value, date):
+                try:
+                    data = value.strftime(
+                        HORILLA_DATE_FORMATS.get(date_format, "%Y-%m-%d")
                     )
-                else:
-                    date_format = "MMM. D, YYYY"
-                # Convert the string to a datetime.date object
-                start_date = datetime.strptime(str(value), "%Y-%m-%d").date()
-
-                # Print the formatted date for each format
-                for format_name, format_string in HORILLA_DATE_FORMATS.items():
-                    if format_name == date_format:
-                        data = start_date.strftime(format_string)
+                except Exception:
+                    data = str(value)
 
             if data == "True":
                 data = _("Yes")
             elif data == "False":
                 data = _("No")
-            employees_data[column_name].append(data)
 
+            employees_data[column_name].append(data)
     data_frame = pd.DataFrame(data=employees_data)
     response = HttpResponse(content_type="application/ms-excel")
     response["Content-Disposition"] = 'attachment; filename="employee_export.xlsx"'
@@ -2793,7 +2818,7 @@ def get_employees_birthday(request):
                 else f"{default_avatar_url}{emp.employee_first_name}+{emp.employee_last_name}"
             ),
             "name": f"{emp.employee_first_name} {emp.employee_last_name}",
-            "dob": emp.dob.strftime("%d %b %Y"),
+            "dob": emp.dob.strftime("%d %b"),
             "daysUntilBirthday": (
                 _("Today")
                 if emp.days_until_birthday == 0
@@ -2999,7 +3024,6 @@ def employee_select_filter(request):
             request.GET, queryset=Employee.objects.filter()
         )
 
-        # Get the filtered queryset
         filtered_employees = filtersubordinatesemployeemodel(
             request=request, queryset=employee_filter.qs, perm="employee.view_employee"
         )
@@ -3014,7 +3038,7 @@ def employee_select_filter(request):
 @login_required
 @hx_request_required
 @manager_can_enter(perm="employee.view_employeenote")
-def note_tab(request, emp_id):
+def note_tab(request, pk):
     """
     This function is used to view note tab of an employee in employee individual
     & profile view.
@@ -3026,13 +3050,34 @@ def note_tab(request, emp_id):
     Returns: return note-tab template
 
     """
-    employee_obj = Employee.objects.get(id=emp_id)
-    notes = EmployeeNote.objects.filter(employee_id=emp_id).order_by("-id")
+    employee_obj = Employee.objects.get(id=pk)
+    notes = EmployeeNote.objects.filter(employee_id=pk).order_by("-id")
 
     return render(
         request,
-        "tabs/note_tab.html",
+        "tabs/main_note_tab.html",
         {"employee": employee_obj, "notes": notes},
+    )
+
+
+def history_tab(request, pk):
+    """
+    This function is used to view history tab of an employee in employee individual
+    & profile view.
+
+    Parameters:
+    request (HttpRequest): The HTTP request object.
+    emp_id (int): The id of the employee.
+
+    Returns: return history template
+
+    """
+    employee_obj = Employee.objects.get(id=pk)
+
+    return render(
+        request,
+        "tabs/history.html",
+        {"employee": employee_obj},
     )
 
 
@@ -3041,7 +3086,8 @@ def note_tab(request, emp_id):
 @manager_can_enter(perm="employee.add_employeenote")
 def add_note(request, emp_id=None):
     """
-    This method renders template component to add candidate remark
+    Handles the addition of a note to a specific employee, including file attachments.
+    Saves the note and redirects to the employee's note tab upon successful submission.
     """
 
     form = EmployeeNoteForm(initial={"employee_id": emp_id})
@@ -3059,7 +3105,6 @@ def add_note(request, emp_id=None):
             note.save()
             note.note_files.set(attachment_ids)
             messages.success(request, _("Note added successfully.."))
-            response = render(request, "tabs/add_note.html", {"form": form})
             return redirect(f"/employee/note-tab/{emp_id}")
 
     employee_obj = Employee.objects.get(id=emp_id)
@@ -3161,7 +3206,7 @@ def delete_employee_note_file(request, note_file_id):
 @login_required
 @hx_request_required
 @owner_can_enter("employee.view_bonuspoint", Employee)
-def bonus_points_tab(request, emp_id):
+def bonus_points_tab(request, pk):
     """
     This function is used to view Bonus Points tab of an employee in employee individual
     & profile view.
@@ -3173,15 +3218,15 @@ def bonus_points_tab(request, emp_id):
     Returns: return bonus_points template
 
     """
-    employee_obj = Employee.objects.get(id=emp_id)
+    employee_obj = Employee.objects.get(id=pk)
     try:
-        points = BonusPoint.objects.get(employee_id=emp_id)
+        points = BonusPoint.objects.get(employee_id=pk)
         if apps.is_installed("payroll"):
             Reimbursement = get_horilla_model_class(
                 app_label="payroll", model="reimbursement"
             )
             requested_bonus_points = Reimbursement.objects.filter(
-                employee_id=emp_id, type="bonus_encashment", status="requested"
+                employee_id=pk, type="bonus_encashment", status="requested"
             )
         else:
             requested_bonus_points = QuerySet().none()
@@ -3534,12 +3579,11 @@ def first_last_badge(request):
 @login_required
 @hx_request_required
 @manager_can_enter("employee.view_employee")
-def employee_get_mail_log(request):
+def employee_get_mail_log(request, pk):
     """
     This method is used to track mails sent along with the status
     """
-    employee_id = request.GET["emp_id"]
-    employee = Employee.objects.get(id=employee_id)
+    employee = Employee.objects.get(id=pk)
     tracked_mails = EmailLog.objects.filter(to__icontains=employee.email)
     try:
         if employee.employee_work_info and employee.employee_work_info.email:
@@ -3563,7 +3607,44 @@ def get_job_positions(request):
         if department_id
         else []
     )
-    return JsonResponse({"job_positions": dict(job_positions)})
+    job_id = (
+        request.GET.get("job_id") or job_positions.first()[0] if job_positions else None
+    )
+
+    job_roles = (
+        JobRole.objects.filter(job_position_id=job_id).values_list("id", "job_role")
+        if job_id
+        else []
+    )
+    return JsonResponse(
+        {"job_positions": dict(job_positions), "job_roles": dict(job_roles)}
+    )
+
+
+@login_required
+def get_job_positions_hx(request):
+    department_id = request.GET.get("department_id")
+    job_position_id = request.GET.get("job_position_id")
+    form = EmployeeWorkInformationUpdateForm()
+    if department_id:
+        job_positions = JobPosition.objects.filter(department_id=department_id)
+        form.fields["job_position_id"].queryset = job_positions
+        if job_position_id:
+            form.fields["job_position_id"].initial = job_position_id
+        else:
+            form.fields["job_position_id"].initial = (
+                form.fields["job_position_id"].queryset.first().id
+            )
+
+    job_position_field_html = render_to_string(
+        "cbv/dashboard/job_position_field.html",
+        {
+            "form": form,
+            "field_name": "job_position_id",
+            "field": form.fields["job_position_id"],
+        },
+    )
+    return HttpResponse(job_position_field_html)
 
 
 @login_required
@@ -3575,11 +3656,89 @@ def get_job_roles(request):
     JobRole model for job roles that match the provided job_position_id, and
     returns the results as a JSON response.
     """
-    job_id = request.GET.get("job_id")
-    job_roles = JobRole.objects.filter(job_position_id=job_id).values_list(
-        "id", "job_role"
+
+    job_position_id = request.GET.get("job_position_id")
+    job_position = JobPosition.objects.filter(id=job_position_id).first()
+    department = job_position.department_id if job_position else None
+    job_roles = (
+        JobRole.objects.filter(job_position_id=job_position_id).values_list(
+            "id", "job_role"
+        )
+        if job_position
+        else []
     )
-    return JsonResponse({"job_roles": dict(job_roles)})
+    all_departments = Department.objects.values_list("id", "department")
+    return JsonResponse(
+        {
+            "department_id": department.id if department else None,
+            "department_name": department.department if department else None,
+            "job_roles": dict(job_roles),
+            "departments": dict(all_departments),
+        }
+    )
+
+
+@login_required
+def get_position_department(request):
+    """
+    Retrieve job position and department associated with a specific job roles.
+
+    This view function extracts the job_id from the GET request, queries the
+    JobRole model for job roles that match the provided job_position_id, and
+    returns the results as a JSON response.
+    """
+
+    job_role_id = request.GET.get("job_role_id")
+    job_role = JobRole.objects.filter(id=job_role_id).first()
+    job_position = job_role.job_position_id if job_role else None
+    department = job_role.job_position_id.department_id if job_role else None
+
+    all_departments = Department.objects.values_list("id", "department")
+    all_job_position = (
+        JobPosition.objects.filter(department_id=department.id).values_list(
+            "id", "job_position"
+        )
+        if department
+        else []
+    )
+    return JsonResponse(
+        {
+            "job_position_id": job_position.id if job_position else None,
+            "job_position_name": job_position.job_position if job_position else None,
+            "job_positions": dict(all_job_position),
+            "departments": dict(all_departments),
+            "department_id": department.id if department else None,
+            "department_name": department.department if department else None,
+        }
+    )
+
+
+@login_required
+def get_job_roles_hx(request):
+    """
+    Retrieve job roles associated with a specific job position.
+
+    This view function extracts the job_id from the GET request, queries the
+    JobRole model for job roles that match the provided job_position_id, and
+    returns the results as a JSON response.
+    """
+    job_position_id = request.GET.get("job_position_id")
+    job_role_id = request.GET.get("job_role_id")
+    form = EmployeeWorkInformationUpdateForm()
+    if job_position_id:
+        job_role = JobRole.objects.filter(job_position_id=job_position_id)
+        form.fields["job_role_id"].queryset = job_role
+        if job_role_id:
+            form.fields["job_role_id"].initial = job_role_id
+    job_role_field_html = render_to_string(
+        "cbv/dashboard/job_role_field.html",
+        {
+            "form": form,
+            "field_name": "job_role_id",
+            "field": form.fields["job_role_id"],
+        },
+    )
+    return HttpResponse(job_role_field_html)
 
 
 @login_required

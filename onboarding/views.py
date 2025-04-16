@@ -468,7 +468,7 @@ def candidate_delete(request, obj_id):
                 )
             ),
         )
-    return redirect(candidates_view)
+    return redirect(reverse("candidates-view"))
 
 
 @login_required
@@ -670,62 +670,65 @@ def email_send(request):
     for cand_id in candidates:
         attachments = list(set(attachments_other) | set([]))
         candidate = Candidate.objects.get(id=cand_id)
-        if candidate.converted_employee_id:
-            messages.info(
-                request, _(f"{candidate} has already been converted to employee.")
-            )
-            continue
-        for html in bodys:
-            # due to not having solid template we first need to pass the context
-            template_bdy = template.Template(html)
-            context = template.Context(
-                {"instance": candidate, "self": request.user.employee_get}
-            )
-            render_bdy = template_bdy.render(context)
-            attachments.append(
-                (
-                    "Document",
-                    generate_pdf(render_bdy, {}, path=False, title="Document").content,
-                    "application/pdf",
+        if not request.GET.get("no_portal"):
+            if candidate.converted_employee_id:
+                messages.info(
+                    request, _(f"{candidate} has already been converted to employee.")
                 )
+                continue
+            for html in bodys:
+                # due to not having solid template we first need to pass the context
+                template_bdy = template.Template(html)
+                context = template.Context(
+                    {"instance": candidate, "self": request.user.employee_get}
+                )
+                render_bdy = template_bdy.render(context)
+                attachments.append(
+                    (
+                        "Document",
+                        generate_pdf(
+                            render_bdy, {}, path=False, title="Document"
+                        ).content,
+                        "application/pdf",
+                    )
+                )
+            token = secrets.token_hex(15)
+            existing_portal = OnboardingPortal.objects.filter(candidate_id=candidate)
+            if existing_portal.exists():
+                new_portal = existing_portal.first()
+                new_portal.token = token
+                new_portal.used = False
+                new_portal.count = 0
+                new_portal.profile = None
+                new_portal.save()
+            else:
+                OnboardingPortal(candidate_id=candidate, token=token).save()
+            html_message = render_to_string(
+                "onboarding/mail_templates/default.html",
+                {
+                    "portal": f"{protocol}://{host}/onboarding/user-creation/{token}",
+                    "instance": candidate,
+                    "host": host,
+                    "protocol": protocol,
+                },
+                request=request,
             )
-        token = secrets.token_hex(15)
-        existing_portal = OnboardingPortal.objects.filter(candidate_id=candidate)
-        if existing_portal.exists():
-            new_portal = existing_portal.first()
-            new_portal.token = token
-            new_portal.used = False
-            new_portal.count = 0
-            new_portal.profile = None
-            new_portal.save()
-        else:
-            OnboardingPortal(candidate_id=candidate, token=token).save()
-        html_message = render_to_string(
-            "onboarding/mail_templates/default.html",
-            {
-                "portal": f"{protocol}://{host}/onboarding/user-creation/{token}",
-                "instance": candidate,
-                "host": host,
-                "protocol": protocol,
-            },
-            request=request,
-        )
-        email = EmailMessage(
-            subject=f"Hello {candidate.name}, Congratulations on your selection!",
-            body=html_message,
-            to=[candidate.email],
-        )
-        email.content_subtype = "html"
-        email.attachments = attachments
-        try:
-            email.send()
-            # to check ajax or not
-            messages.success(request, "Portal link sent to the candidate")
-        except Exception as e:
-            logger.error(e)
-            messages.error(request, f"Mail not send to {candidate.name}")
-        candidate.start_onboard = True
-        candidate.save()
+            email = EmailMessage(
+                subject=f"Hello {candidate.name}, Congratulations on your selection!",
+                body=html_message,
+                to=[candidate.email],
+            )
+            email.content_subtype = "html"
+            email.attachments = attachments
+            try:
+                email.send()
+                # to check ajax or not
+                messages.success(request, "Portal link sent to the candidate")
+            except Exception as e:
+                logger.error(e)
+                messages.error(request, f"Mail not send to {candidate.name}")
+            candidate.start_onboard = True
+            candidate.save()
         try:
             onboarding_candidate = CandidateStage()
             onboarding_candidate.onboarding_stage_id = (
@@ -733,6 +736,7 @@ def email_send(request):
             )
             onboarding_candidate.candidate_id = candidate
             onboarding_candidate.save()
+            messages.success(request, "Candidate Added to Onboarding Stage")
         except Exception as e:
             logger.error(e)
 
@@ -1082,6 +1086,7 @@ def employee_creation(request, token):
             work_info.job_position_id = job_position
             work_info.date_joining = candidate.joining_date
             work_info.email = candidate.email
+            work_info.company_id = candidate.recruitment_id.company_id
             work_info.save()
             onboarding_portal.count = 3
             onboarding_portal.save()
@@ -1698,7 +1703,11 @@ def change_task_status(request):
     ]:
         candidate_task.status = status
         candidate_task.save()
-    return HttpResponse("Success")
+        messages.success(request, _("Task status updated successfully."))
+
+    return HttpResponse(
+        "<script>$('#reloadMessagesButton').click(); $('#myOnboardingReload').click(); </script>"
+    )
 
 
 @login_required
@@ -1713,7 +1722,15 @@ def update_offer_letter_status(request):
     if status in ["not_sent", "sent", "accepted", "rejected", "joined"]:
         candidate.offer_letter_status = status
         candidate.save()
-    return HttpResponse("Success")
+    # return HttpResponse("Success")
+    return JsonResponse(
+        {
+            "type": "success",
+            "message": _("{candidate}'s Offer letter status updated").format(
+                candidate=candidate.name
+            ),
+        }
+    )
 
 
 @login_required

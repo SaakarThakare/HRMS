@@ -9,11 +9,13 @@ import requests
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
 from django.db import models
+from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
 
 from base.models import Company
 from employee.models import Employee
 from horilla.models import HorillaModel
+from horilla_views.cbv_methods import render_template
 
 
 def validate_schedule_time_format(value):
@@ -49,6 +51,8 @@ class BiometricDevices(HorillaModel):
         ("zk", _("ZKTeco Biometric")),
         ("anviz", _("Anviz Biometric")),
         ("cosec", _("Matrix COSEC Biometric")),
+        ("dahua", _("Dahua Biometric")),
+        ("etimeoffice", _("e-Time Office")),
     ]
     id = models.UUIDField(default=uuid.uuid4, primary_key=True, editable=False)
     name = models.CharField(max_length=100)
@@ -57,11 +61,15 @@ class BiometricDevices(HorillaModel):
         choices=BIO_DEVICE_TYPE,
         null=True,
     )
-    machine_ip = models.CharField(max_length=15, null=True, blank=True, default="")
+    machine_ip = models.CharField(max_length=150, null=True, blank=True, default="")
     port = models.IntegerField(null=True, blank=True)
     zk_password = models.CharField(max_length=100, null=True, blank=True, default="0")
-    cosec_username = models.CharField(max_length=100, null=True, blank=True, default="")
-    cosec_password = models.CharField(max_length=100, null=True, blank=True)
+    bio_username = models.CharField(
+        max_length=100, null=True, blank=True, default="", verbose_name=_("Username")
+    )
+    bio_password = models.CharField(
+        max_length=100, null=True, blank=True, verbose_name=_("Password")
+    )
     anviz_request_id = models.CharField(max_length=200, null=True, blank=True)
     api_url = models.CharField(max_length=200, null=True, blank=True)
     api_key = models.CharField(max_length=100, null=True, blank=True)
@@ -87,83 +95,182 @@ class BiometricDevices(HorillaModel):
     def __str__(self):
         return f"{self.name} - {self.machine_type}"
 
+    def get_card_details(self):
+        """
+        return card details based on machine type
+        """
+
+        if self.machine_type in ["zk", "cosec"]:
+            return f"Machine IP : {self.machine_ip}<br>Port No : {self.port}"
+        elif self.machine_type == "anviz":
+            return f"API Url : {self.api_url}"
+        else:
+            return ""
+
+    def render_live_capture_html(self):
+        """
+        live capture button
+        """
+        checked_attribute = "checked" if self.is_live else ""
+        activate_label = "Activate live capture mode"
+        activate_title = "Activate" if not self.is_live else "Deactivate"
+
+        if self.machine_type in ["zk", "cosec"]:
+            html = f"""
+            <td>
+                  <span class="oh-kanban-card__subtitle d-block">{activate_label}</span>
+                </td>
+                <td>
+                <div class="oh-switch">
+                    <input type="checkbox"
+                        class="style-widget oh-switch__checkbox is-live-activate"
+                        title="{activate_title}"
+                        data-toggle="oh-modal-toggle"
+                        data-target="#BiometricDeviceTestModal"
+                        name="is_live"
+                        {checked_attribute}
+                        hx-trigger="change"
+                        hx-get="/biometric/biometric-device-live-capture?deviceId=d9ab2bc7-01d5-4005-897f-01f35198d743&amp;search=&amp;machine_type=&amp;is_scheduler=unknown&amp;is_active=unknown&amp;is_live=unknown&amp;page=1&amp;view=card"
+                        hx-target="#BiometricDeviceTestFormTarget" />
+                </div>
+                </td>
+                """
+            return html
+        else:
+            return ""
+
+    def render_actions_html(self):
+        """
+        actions buttons
+        """
+
+        margin_style = (
+            "style='margin-top:0px;'" if self.machine_type in ["anviz", "cosec"] else ""
+        )
+
+        test_url = reverse("biometric-device-test", args=[self.id])
+        unschedule_url = reverse("biometric-device-unschedule", args=[self.id])
+        schedule_url = reverse("biometric-device-schedule", args=[self.id])
+        employees_url = reverse("biometric-device-employees", args=[self.id])
+
+        html = f"""
+        <div class="d-block oh-kanban-card__biometric-actions" {margin_style} style="display: flex; gap: 10px; ">
+            <a href="#" hx-get="{test_url}" data-toggle="oh-modal-toggle"
+                data-target="#BiometricDeviceTestModal" hx-target="#BiometricDeviceTestFormTarget"
+                class="oh-checkpoint-badge text-success mr-2" style="border: 2px solid #28a745; padding: 5px 10px; border-radius: 4px; display: inline-block; color: #28a745;">Test
+            </a>
+            {"<a hx-confirm='Do you want to unschedule the device attendance fetching?'"
+              f" hx-post='{unschedule_url}'"
+              " hx-target='#biometricDeviceList' class='oh-checkpoint-badge text-info ' style='border: 2px solid #17a2b8; padding: 5px 10px; border-radius: 4px; display: inline-block; color: #17a2b8;'>Unschedule</a>"
+              if self.is_scheduler else
+              "<a href='#' class='oh-checkpoint-badge text-info' hx-get='" + schedule_url + "'"
+              " data-toggle='oh-modal-toggle' data-target='#BiometricDeviceModal'"
+              " hx-target='#BiometricDeviceFormTarget' style='border: 2px solid #17a2b8; padding: 5px 10px; border-radius: 4px; display: inline-block; color: #17a2b8;'>Schedule</a>"}
+            {"<a href='" + employees_url + "' class='oh-checkpoint-badge text-secondary bio-user-list ml-4' style='border: 2px solid #6c757d; padding: 5px 10px; border-radius: 4px; display: inline-block; color: #6c757d;'>Employee</a>"
+              if self.machine_type in ["zk", "cosec"] else ""}
+        </div>
+
+        """
+
+        return html
+
+    def archive_status(self):
+        """
+        archive status
+        """
+        if self.is_active:
+            return "Archive"
+        else:
+            return "Un-Archive"
+
+    def get_update_url(self):
+        """
+        This method to get update url
+        """
+        url = reverse_lazy("biometric-device-edit", kwargs={"device_id": self.pk})
+        return url
+
+    def get_archive_url(self):
+        """
+        This method to get archive url
+        """
+        url = reverse_lazy("biometric-device-archive", kwargs={"device_id": self.pk})
+        return url
+
+    def get_delete_url(self):
+        """
+        This method to get delete url
+        """
+        url = reverse_lazy("biometric-device-delete", kwargs={"device_id": self.pk})
+        return url
+
+    def get_machine_type(self):
+        """
+        return machine type from choices
+        """
+
+        return dict(self.BIO_DEVICE_TYPE).get(self.machine_type)
+
+    def get_avatar(self):
+        """
+        Method will retun the api to the avatar or path to the profile image
+        """
+        url = f"https://ui-avatars.com/api/?name={self.name}&background=random"
+        return url
+
     def clean(self, *args, **kwargs):
         super().clean(*args, **kwargs)
-        if self.machine_type in ("zk", "cosec"):
+        required_fields = {}
+
+        if self.machine_type in ("zk", "cosec", "dahua"):
             if not self.machine_ip:
-                raise ValidationError(
-                    {
-                        "machine_ip": _(
-                            "The Machine IP is required for ZKTeco Biometric\
-                            & Matrix COSEC Biometric"
-                        )
-                    }
+                required_fields["machine_ip"] = _(
+                    "The Machine IP is required for the selected biometric device."
                 )
             if not self.port:
-                raise ValidationError(
-                    {"port": _("The Port No is required for ZKTeco Biometric")}
-                )
-        if self.machine_type == "zk":
-            if not self.zk_password:
-                raise ValidationError(
-                    {
-                        "zk_password": _(
-                            "The password is required for ZKTeco Biometric Device"
-                        )
-                    }
-                )
-            try:
-                int(self.zk_password)
-            except ValueError:
-                raise ValidationError(
-                    {
-                        "zk_password": _(
-                            "The password must be an integer (numeric) value for ZKTeco Biometric Device"
-                        )
-                    }
+                required_fields["port"] = _(
+                    "The Port Number is required for the selected biometric device."
                 )
 
-        if self.machine_type == "cosec":
-            if not self.cosec_username:
-                raise ValidationError(
-                    {
-                        "cosec_username": _(
-                            "The username is required for Matrix COSEC Biometric"
-                        )
-                    }
+        if self.machine_type == "zk":
+            if not self.zk_password:
+                required_fields["zk_password"] = _(
+                    "The password is required for ZKTeco Biometric Device."
                 )
-            if not self.cosec_password:
-                raise ValidationError(
-                    {
-                        "cosec_username": _(
-                            "The password is required for Matrix COSEC Biometric"
-                        )
-                    }
+            else:
+                try:
+                    int(self.zk_password)
+                except ValueError:
+                    required_fields["zk_password"] = _(
+                        "The password must be an integer (numeric) value for ZKTeco Biometric Device."
+                    )
+
+        if self.machine_type in ("cosec", "dahua"):
+            if not self.bio_username:
+                required_fields["bio_username"] = _(
+                    "The Username is required for the selected biometric device."
                 )
+            if not self.bio_password:
+                required_fields["bio_password"] = _(
+                    "The Password is required for the selected biometric device."
+                )
+
         if self.machine_type == "anviz":
             if not self.anviz_request_id:
-                raise ValidationError(
-                    {
-                        "anviz_request_id": _(
-                            "The Request ID required for the Anviz Biometric Device."
-                        )
-                    }
+                required_fields["anviz_request_id"] = _(
+                    "The Request ID is required for the Anviz Biometric Device."
                 )
             if not self.api_url:
-                raise ValidationError(
-                    {"api_url": _("The API Url required for Anviz Biometric Device")}
+                required_fields["api_url"] = _(
+                    "The API URL is required for Anviz Biometric Device."
                 )
             if not self.api_key:
-                raise ValidationError(
-                    {"api_key": _("The API Key required for Anviz Biometric Device")}
+                required_fields["api_key"] = _(
+                    "The API Key is required for Anviz Biometric Device."
                 )
             if not self.api_secret:
-                raise ValidationError(
-                    {
-                        "api_secret": _(
-                            "The API Secret is required for Anviz Biometric Device"
-                        )
-                    }
+                required_fields["api_secret"] = _(
+                    "The API Secret is required for Anviz Biometric Device."
                 )
             if self.anviz_request_id and self.api_key and self.api_secret:
                 payload = {
@@ -216,6 +323,8 @@ class BiometricDevices(HorillaModel):
                             )
                         }
                     ) from exc
+        if required_fields:
+            raise ValidationError(required_fields)
 
     class Meta:
         """
@@ -241,8 +350,11 @@ class BiometricEmployees(models.Model):
     ref_user_id = models.IntegerField(
         null=True, blank=True, validators=[MaxValueValidator(99999999)]
     )
-    user_id = models.CharField(max_length=100)
-    employee_id = models.ForeignKey(Employee, on_delete=models.CASCADE)
+    user_id = models.CharField(max_length=100, verbose_name=_("User ID"))
+    dahua_card_no = models.CharField(max_length=100, null=True, blank=True)
+    employee_id = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, verbose_name=_("Employee")
+    )
     device_id = models.ForeignKey(
         BiometricDevices, on_delete=models.CASCADE, null=True, blank=True
     )

@@ -18,7 +18,7 @@ from django.template.loader import render_to_string
 from django.utils.translation import gettext_lazy as _
 
 from base.forms import ModelForm as BaseForm
-from base.forms import ModelForm as MF
+from base.forms import ModelForm as HorillaModelForm
 from base.methods import (
     filtersubordinatesemployeemodel,
     is_reportingmanager,
@@ -334,7 +334,7 @@ class EmployeeObjectiveCreateForm(BaseForm):
         widgets = {
             "start_date": forms.DateInput(
                 attrs={"class": "oh-input w-100", "type": "date"}
-            ),
+            )
         }
 
     def __init__(self, *args, **kwargs):
@@ -447,10 +447,7 @@ class EmployeeKeyResultForm(BaseForm):
             )
 
 
-from base.forms import ModelForm as MF
-
-
-class KRForm(MF):
+class KRForm(HorillaModelForm):
     """
     A form used for creating KeyResult object
     """
@@ -661,76 +658,71 @@ class KeyResultForm(ModelForm):
         return cleaned_data
 
 
-class FeedbackForm(ModelForm):
+class FeedbackForm(HorillaModelForm):
     """
-    A form used for creating and updating Feedback objects.
+    FeedbackForm for better performance.
     """
 
     period = forms.ModelChoiceField(
-        queryset=Period.objects.all(),
+        queryset=Period.objects.none(),
+        label=_("Period"),
         empty_label="",
-        widget=forms.Select(
-            attrs={
-                "class": " oh-select--period-change ",
-                "style": "width:100%;",
-            }
-        ),
+        widget=forms.Select(attrs={"class": "oh-select--period-change"}),
         required=False,
     )
 
     class Meta:
-        """
-        A nested class that specifies the model,fields and exclude fields for the form.
-        """
-
         model = Feedback
-        fields = "__all__"
-        exclude = ["status", "archive", "is_active"]
+        fields = [
+            "review_cycle",
+            "employee_id",
+            "manager_id",
+            "subordinate_id",
+            "colleague_id",
+            "start_date",
+            "end_date",
+            "question_template_id",
+            "employee_key_results_id",
+            "cyclic_feedback",
+            "cyclic_feedback_days_count",
+            "cyclic_feedback_period",
+        ]
+        # fields = "__all__"
+        exclude = [
+            "status",
+            "archive",
+            "is_active",
+            "cyclic_next_start_date",
+            "cyclic_next_end_date",
+        ]
+
+        labels = {
+            "manager_id": _("Manager"),
+            "employee_id": _("Employee"),
+            "colleague_id": _("Colleague"),
+            "question_template_id": _("Question Template"),
+            "employee_key_results_id": _("Key Result"),
+            "cyclic_feedback": _("Is Cyclic Feedback"),
+            # "cyclic_feedback_period":_("")
+        }
 
         widgets = {
+            "employee_key_results_id": forms.SelectMultiple(
+                attrs={
+                    "class": "oh-select oh-select-2 w-100",
+                    "multiple": "multiple",
+                    "style": "width:100%; display:none;",
+                    "required": False,
+                }
+            ),
             "review_cycle": forms.TextInput(
                 attrs={"placeholder": _("Enter a title"), "class": "oh-input w-100"}
             ),
             "start_date": forms.DateInput(
-                attrs={"type": "date", "class": "oh-input  w-100"}
+                attrs={"type": "date", "class": "oh-input w-100"}
             ),
             "end_date": forms.DateInput(
-                attrs={"type": "date", "class": "oh-input  w-100"}
-            ),
-            "employee_id": forms.Select(
-                attrs={
-                    "class": "oh-select oh-select-2",
-                    "required": "false",
-                },
-            ),
-            "manager_id": forms.Select(
-                attrs={
-                    "class": "oh-select oh-select-2 ",
-                    "style": "width:100%;",
-                    "required": "true",
-                },
-            ),
-            "colleague_id": forms.SelectMultiple(
-                attrs={
-                    "class": "oh-select oh-select-2 w-100",
-                    "multiple": "multiple",
-                    "style": "width:100%;",
-                }
-            ),
-            "subordinate_id": forms.SelectMultiple(
-                attrs={
-                    "class": "oh-select oh-select-2 w-100",
-                    "multiple": "multiple",
-                    "style": "width:100%;",
-                    "required": "false",
-                }
-            ),
-            "question_template_id": forms.Select(
-                attrs={
-                    "class": "oh-select oh-select--lg oh-select-no-search",
-                    "style": "width:100%;",
-                    "required": "true",
-                }
+                attrs={"type": "date", "class": "oh-input w-100"}
             ),
             "cyclic_feedback": forms.CheckboxInput(
                 attrs={
@@ -738,41 +730,43 @@ class FeedbackForm(ModelForm):
                     "onchange": "changeCyclicFeedback(this)",
                 }
             ),
-            "cyclic_feedback_period": forms.Select(
-                attrs={
-                    "class": "oh-select oh-select--lg oh-select-no-search",
-                    "style": "width:100%;",
-                }
-            ),
-            "cyclic_feedback_days_count": forms.NumberInput(
-                attrs={
-                    "class": "oh-input",
-                }
-            ),
         }
 
     def __init__(self, *args, **kwargs):
         """
-        Initializes the feedback form instance.
-        If an instance is provided, sets the initial value for the form's date fields.
+        Initializes the form and queryset filtering.
         """
-        # fetch request
         request = getattr(horilla_middlewares._thread_locals, "request", None)
-        # get instance
-        instance = kwargs.get("instance")
-        # set employee
-        if instance:
-            employee = instance.employee_id
-        else:
-            employee = request.user.employee_get
-
-        if not instance:
-            today = datetime.datetime.today().date()
-            kwargs["initial"] = {"start_date": today, "end_date": today}
-
         super().__init__(*args, **kwargs)
+        # if instance:
+        #     kwargs["initial"] = set_date_field_initial(instance)
 
-        # Horilla multi select filter for employee
+        user = request.user if request else None
+        user_perms = user.get_all_permissions() if user else set()
+
+        self.fields["period"].queryset = Period.objects.all()
+        self.fields["period"].widget.attrs.update({"class": "w-100"})
+
+        if user and ("pms.add_period" in user_perms or is_reportingmanager(request)):
+            self.fields["period"].choices = [
+                *self.fields["period"].choices,
+                ("create_new_period", "Create new period"),
+            ]
+
+        employee_queryset = Employee.objects.none()
+        if user and ("pms.add_feedback" in user_perms or is_reportingmanager(request)):
+            employee_queryset = filtersubordinatesemployeemodel(
+                request,
+                Employee.objects.all(),
+                perm="pms.add_feedback",
+            )
+
+        self.fields["employee_id"].queryset = (
+            employee_queryset | Employee.objects.filter(employee_user_id=request.user)
+        )
+        self.fields["employee_id"].widget.attrs["onchange"] = "get_collegues($(this))"
+
+        # Horilla multi-select filter for subordinates
         self.fields["subordinate_id"] = HorillaMultiSelectField(
             queryset=Employee.objects.all(),
             widget=HorillaMultiSelectWidget(
@@ -783,32 +777,10 @@ class FeedbackForm(ModelForm):
                 instance=self.instance,
                 required=False,
             ),
-            label="Subordinates",
+            label=_("Subordinates"),
         )
-        reload_queryset(self.fields)
 
-        # check the request user has permission to add period
-        if request.user.has_perm("pms.add_period") or is_reportingmanager(request):
-            # add dyanamic period creation as choice
-            self.fields["period"].choices = list(self.fields["period"].choices)
-            self.fields["period"].choices.append(
-                ("create_new_period", "Create new period")
-            )
-        # add onchange function to get employee data
-        self.fields["employee_id"].widget.attrs.update(
-            {"onchange": "get_collegues($(this))"}
-        )
-        # filtering employees accordig to the request user
-        if request.user.has_perm("pms.add_feedback") or is_reportingmanager(request):
-            # Queryset of subordinate employees
-            employees = filtersubordinatesemployeemodel(
-                request, Employee.objects.all(), perm="pms.add_feedback"
-            )
-            self.fields["employee_id"].queryset = employees | Employee.objects.filter(
-                employee_user_id=request.user
-            )
-            if not instance:
-                self.fields["employee_id"].initial = employee
+        reload_queryset(self.fields)
 
     def clean(self):
         """
@@ -833,6 +805,8 @@ class QuestionTemplateForm(ModelForm):
     """
     Form for creating or updating a question template instance
     """
+
+    cols = {"question_template": 12, "company_id": 12}
 
     question_template = forms.CharField(
         widget=forms.TextInput(
@@ -1042,6 +1016,15 @@ class PeriodForm(ModelForm):
 
 
 class AnonymousFeedbackForm(BaseForm):
+    cols = {
+        "feedback_subject": 12,
+        "based_on": 12,
+        "feedback_description": 12,
+        "employee_id": 12,
+        "department_id": 12,
+        "job_position_id": 12,
+    }
+
     class Meta:
         model = AnonymousFeedback
         fields = "__all__"
@@ -1049,6 +1032,13 @@ class AnonymousFeedbackForm(BaseForm):
 
 
 class MeetingsForm(BaseForm):
+
+    cols = {
+        "employee_id": 12,
+        "manager": 12,
+        "answer_employees": 12,
+        "question_template": 12,
+    }
     date = forms.DateTimeField(
         widget=forms.DateTimeInput(
             attrs={"class": "oh-input w-100", "type": "datetime-local"}
@@ -1119,7 +1109,22 @@ class MeetingsForm(BaseForm):
             pass
 
 
-class BonusPointSettingForm(MF):
+class MeetingResponseForm(ModelForm):
+    """
+    Meeting response form
+    """
+
+    cols = {"response": 12}
+
+    class Meta:
+        model = Meetings
+        fields = ["response"]
+        widgets = {
+            "response": forms.Textarea(attrs={"data-summernote": ""}),
+        }
+
+
+class BonusPointSettingForm(HorillaModelForm):
     """
     BonusPointSetting form
     """
@@ -1165,7 +1170,7 @@ class BonusPointSettingForm(MF):
         return cleaned_data
 
 
-class EmployeeBonusPointForm(MF):
+class EmployeeBonusPointForm(HorillaModelForm):
     """
     EmployeeBonusPoint form
     """

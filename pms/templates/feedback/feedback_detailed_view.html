@@ -1,5 +1,6 @@
 {% extends 'index.html' %}
 {% block content %}
+{% include 'generic/components.html' %}
 {% load static i18n %}
 {% load i18n %}
 {% load basefilters %}
@@ -120,9 +121,9 @@
                         <button
                           data-toggle="oh-modal-toggle"
                           class="oh-btn oh-btn--light-bkg w-100"
-                          data-target="#feedbackModalPopup"
-                          hx-get="{% url 'feedback-update' id=feedback.id %}"
-                          hx-target="#feedbackModalTarget">
+                          data-target="#genericModal"
+                          hx-get="{% url 'feedback-update' feedback.id %}"
+                          hx-target="#genericModalBody">
                           <ion-icon name="create-outline" class="me-1" ></ion-icon>
                         </button>
                       </div>
@@ -186,12 +187,14 @@
           <div class="d-flex justify-content-between custom-scroll">
             <div class="avatars" id="avatarsContainer">
               {% for employee in employee_statics.no %}
+              {% if employee %}
               <a
                 href="{% url 'employee-view-individual' employee.id %}"
                 class="avatars__item"
                 title="{{employee}}"
                 ><img class="avatar" src="{{employee.get_avatar}}" alt=""
               /></a>
+              {% endif %}
               {% endfor %}
             </div>
           </div>
@@ -287,6 +290,7 @@
           <div class="row">
             <div class="col-12 col-sm-12 col-md-12 col-lg-12">
               <div class="m-2">
+                {% if feedback.manager_id %}
                 <div class="oh-card__body">
                   <div class="oh-sticky-table">
                     <div class="oh-sticky-table__table">
@@ -320,14 +324,14 @@
                           <div class="oh-sticky-table__td"><button
                             class="oh-btn  oh-btn--secondary oh-activity-sidebar__open"
                             data-target="#answerViewAccordion" hx-post="{%url 'feedback-detailed-view-answer' id=feedback.id emp_id=feedback.manager_id.id %}" hx-target="#answerView">{% trans "Answer View" %}
-                            </button></div>
+                          </button></div>
                       </div>
                       <!-- manager answer off canvas -->
                       <div class="oh-activity-sidebar" id="managerAnswer">
                         <div class="oh-activity-sidebar__header">
                           <ion-icon name="chevron-back-outline"
-                            class="oh-activity-sidebar__header-icon me-2 oh-activity-sidebar__close"
-                            data-target="#managerAnswer"></ion-icon>
+                          class="oh-activity-sidebar__header-icon me-2 oh-activity-sidebar__close"
+                          data-target="#managerAnswer"></ion-icon>
                           <span class="oh-activity-sidebar__title"> {% trans "Answers" %}</span>
                         </div>
                         <div class="oh-activity-sidebar__body">
@@ -338,11 +342,12 @@
                           </ol>
                         </div>
                       </div>
-                        <!-- endof  manager answer off canvas -->
-                      </div>
+                      <!-- endof  manager answer off canvas -->
                     </div>
                   </div>
                 </div>
+                {% endif %}
+              </div>
               </div>
             </div>
           </div>
@@ -510,7 +515,15 @@
   });
 
   function get_collegues(element) {
-      var employee_id = $(element).val();
+
+        if (typeof element === 'object')
+        {
+            var employee_id = $(element).val();
+        }
+        else {
+          var employee_id = element
+        }
+
 
       // Check if the employee_id is valid
       if (employee_id) {

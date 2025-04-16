@@ -1,0 +1,184 @@
+{% extends "index.html" %}
+{% block content %}
+{% load static %}
+{% load i18n %}
+
+<div class="oh-wrapper mt-3">
+
+    <div class="d-flex mt-3 mb-3" style='justify-content: space-between;
+        align-items: center;'>
+        <h1 class="oh-main__titlebar-title fw-bold">
+          {% trans "Performance Reports" %}
+        </h1>
+        <!-- Export Button -->
+        <button id="export-btn" class="oh-btn oh-btn--secondary" style="margin-top: 10px;">
+            <ion-icon name="download-outline" class="mr-1 md hydrated" role="img" aria-label="download"></ion-icon>
+            {% trans "Export Table" %}
+        </button>
+    </div>
+
+    <!-- Model Selection Dropdown -->
+    <span class="ms-1 fw-bold" style="font-size:16px;">Choose Report : </span>
+    <select id="model-select" class="oh-select oh-select--sm ml-2 mb-2" style="width: 200px;">
+        <option value="objective">Objectives</option>
+        <option value="employeeobjective">Employee Objective</option>
+        <option value="feedback">Feedback</option>
+    </select>
+
+
+    <!-- Pivot Container -->
+    <div id="pivot-container" class="mb-5" style="width: 100%; overflow-x: auto;">
+        <div id="pivot-feedback" class="pivot-wrapper" style="display:none;width: 100%; overflow-x: auto;"></div>
+        <div id="pivot-objective" class="pivot-wrapper" style="display:none;width: 100%; overflow-x: auto;"></div>
+        <div id="pivot-employeeobjective" class="pivot-wrapper" style="display:none;width: 100%; overflow-x: auto;"></div>
+    </div>
+
+</div>
+
+
+<!-- jQuery -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+
+<!-- jQuery UI -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js"></script>
+
+<!-- PivotTable.js CSS and JS -->
+<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/pivottable/2.23.0/pivot.min.css" />
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/pivottable/2.23.0/pivot.min.js"></script>
+
+
+<!-- Correct SheetJS (XLSX) Link -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+
+<!-- Latest stable version of Plotly.js -->
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+
+<!-- PivotTable Plotly Renderers -->
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/pivottable/2.23.0/plotly_renderers.min.js"></script>
+
+
+<script>
+    $(function () {
+
+        function loadPivotData(model) {
+            // Hide all containers first
+            $(".pivot-wrapper").hide();
+
+            // Determine current container and row config
+            let containerId = "";
+            let rowsConfig = [];
+
+            if (model === "feedback") {
+                containerId = "pivot-feedback";
+                rowsConfig = ["Employee","Manager","Answerable Employees","Answered Employees","Questions","Answer"];
+            } else if (model === "objective") {
+                containerId = "pivot-objective";
+                rowsConfig = ["Objective","Key Results","Manager","Assignees"];
+            } else if (model === "employeeobjective") {
+                containerId = "pivot-employeeobjective";
+                rowsConfig = ["Employee", "Objective","Employee Keyresult","Keyresult Target Value","Keyresult Current Value"];
+            }
+
+            // Show relevant container
+            $("#" + containerId).show();
+
+            // Fetch and render data in its own container
+            $.getJSON(`pms-pivot?model=${model}`, function (data) {
+                let plotlyRenderers = $.pivotUtilities.plotly_renderers;
+
+                $("#" + containerId).pivotUI(data, {
+                    rows: rowsConfig,
+                    cols: [],
+                    aggregatorName: "Count",
+                    rendererName: "Table",
+                    renderers: $.extend($.pivotUtilities.renderers, plotlyRenderers),
+                    onRefresh: function (config) {
+                        const currentRenderer = config.rendererName;
+                        if (["Table", "Table Barchart", "Heatmap", "Row Heatmap", "Col Heatmap"].includes(currentRenderer)) {
+                            $("#export-btn").show();
+                        } else {
+                            $("#export-btn").hide();
+                        }
+
+                        $(".pvtTotal, .pvtTotalLabel, .pvtGrandTotal, .pvtAggregator").hide();
+
+                        setTimeout(() => {
+                            $(".pvtAttrDropdown option").each(function () {
+                                if (hiddenFields.includes($(this).text())) {
+                                    $(this).remove();
+                                }
+                            });
+                        }, 10);
+                    }
+                });
+            });
+        }
+
+        // Listen to dropdown
+        $("#model-select").on("change", function () {
+            let selectedModel = $(this).val();
+            loadPivotData(selectedModel);
+        });
+
+        // Initial load
+        loadPivotData("objective");
+
+        // Export to Excel on button click
+        $("#export-btn").on("click", function () {
+            let visiblePivot = $(".pivot-wrapper:visible .pvtTable").closest(".pivot-wrapper");
+
+            if (visiblePivot.length) {
+                exportTableToExcel(visiblePivot.attr("id"), "pivot_report.xlsx");
+            }
+        });
+
+        // Function to export table to Excel with styles
+        function exportTableToExcel(containerId, filename) {
+            let table = document.querySelector(`#${containerId} .pvtTable`);
+
+            // Clone the table so we can safely remove elements
+            let clonedTable = table.cloneNode(true);
+
+            // Remove total rows and columns
+            clonedTable.querySelectorAll(".pvtTotal, .pvtTotalLabel, .pvtGrandTotal, .pvtAggregator").forEach(el => el.remove());
+
+            // Create workbook from cleaned table
+            let wb = XLSX.utils.table_to_book(clonedTable, { sheet: "Pivot Data" });
+
+            // Apply custom styles for Excel
+            let ws = wb.Sheets["Pivot Data"];
+            let range = XLSX.utils.decode_range(ws["!ref"]);
+
+            for (let R = range.s.r; R <= range.e.r; ++R) {
+                for (let C = range.s.c; C <= range.e.c; ++C) {
+                    let cell_address = XLSX.utils.encode_cell({ r: R, c: C });
+                    if (!ws[cell_address]) continue;
+
+                    // Style the header row
+                    if (R === 0) {
+                        ws[cell_address].s = {
+                            font: { bold: true, sz: 14, color: { rgb: "FFFFFF" } },
+                            fill: { fgColor: { rgb: "007BFF" } },
+                            alignment: { horizontal: "center", vertical: "center" },
+                            border: { top: { style: "thin" }, bottom: { style: "thin" } },
+                        };
+                    } else {
+                        ws[cell_address].s = {
+                            font: { sz: 12, color: { rgb: "333333" } },
+                            alignment: { horizontal: "center", vertical: "center" },
+                            border: { top: { style: "thin" }, bottom: { style: "thin" } },
+                        };
+                    }
+                }
+            }
+
+            XLSX.writeFile(wb, filename);
+        }
+});
+
+</script>
+
+
+{% endblock content %}

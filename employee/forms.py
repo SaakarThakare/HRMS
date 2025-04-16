@@ -300,25 +300,8 @@ class EmployeeWorkInformationForm(ModelForm):
         """
 
         model = EmployeeWorkInformation
-        fields = (
-            "department_id",
-            "job_position_id",
-            "job_role_id",
-            "shift_id",
-            "work_type_id",
-            "employee_type_id",
-            "reporting_manager_id",
-            "company_id",
-            "location",
-            "email",
-            "mobile",
-            "date_joining",
-            "contract_end_date",
-            "tags",
-            "basic_salary",
-            "salary_hour",
-        )
-        exclude = ("employee_id",)
+        fields = "__all__"
+        exclude = ("employee_id", "additional_info", "experience")
 
         widgets = {
             "date_joining": DateInput(attrs={"type": "date"}),
@@ -404,13 +387,52 @@ class EmployeeWorkInformationUpdateForm(ModelForm):
         """
 
         model = EmployeeWorkInformation
-        fields = "__all__"
-        exclude = ("employee_id",)
+        # fields = "__all__"
+        fields = [
+            "department_id",
+            "job_position_id",
+            "job_role_id",
+            "work_type_id",
+            "employee_type_id",
+            "reporting_manager_id",
+            "company_id",
+            "tags",
+            "location",
+            "email",
+            "mobile",
+            "shift_id",
+            "date_joining",
+            "contract_end_date",
+            "basic_salary",
+            "salary_hour",
+        ]
+        exclude = ("employee_id", "experience", "additional_info")
 
         widgets = {
             "date_joining": DateInput(attrs={"type": "date"}),
             "contract_end_date": DateInput(attrs={"type": "date"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["department_id"].widget.attrs.update(
+            {
+                "hx-target": "#id_job_position_id_parent_div",
+                "hx-include": "#id_job_position_id",
+                "hx-trigger": "change,load",
+                "hx-swap": "innerHTML",
+                "hx-get": "/employee/get-job-positions-hx",
+            }
+        )
+        self.fields["job_position_id"].widget.attrs.update(
+            {
+                "hx-target": "#id_job_role_id_parent_div",
+                "hx-include": "#id_job_role_id",
+                "hx-trigger": "change,load",
+                "hx-swap": "innerHTML",
+                "hx-get": "/employee/get-job-roles-hx",
+            }
+        )
 
     def as_p(self, *args, **kwargs):
         context = {"form": self}
@@ -509,8 +531,11 @@ excel_columns = [
     ("employee_work_info__work_type_id", trans("Work Type")),
     ("employee_work_info__reporting_manager_id", trans("Reporting Manager")),
     ("employee_work_info__employee_type_id", trans("Employee Type")),
-    ("employee_work_info__location", trans("Work Location")),
+    ("employee_work_info__location", trans("Location")),
     ("employee_work_info__date_joining", trans("Date Joining")),
+    ("employee_work_info__basic_salary", trans("Basic Salary")),
+    ("employee_work_info__salary_hour", trans("Salary Hour")),
+    ("employee_work_info__contract_end_date", trans("Contract End Date")),
     ("employee_work_info__company_id", trans("Company")),
     ("employee_bank_details__bank_name", trans("Bank Name")),
     ("employee_bank_details__branch", trans("Branch")),
@@ -638,6 +663,8 @@ class PolicyForm(ModelForm):
     PolicyForm
     """
 
+    cols = {"title": 12, "body": 12, "is_visible_to_all": 12, "company_id": 12}
+
     class Meta:
         model = Policy
         fields = "__all__"
@@ -738,6 +765,9 @@ class DisciplinaryActionForm(ModelForm):
 
 
 class ActiontypeForm(ModelForm):
+
+    cols = {"title": 12, "action_type": 12}
+
     class Meta:
         model = Actiontype
         fields = "__all__"

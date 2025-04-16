@@ -13,10 +13,37 @@ that require device IDs.
 
 from django.urls import path
 
+from biometric.cbv import biometric
+
 from . import views
 from .models import BiometricDevices
 
 urlpatterns = [
+    path(
+        "biometric-device-add/",
+        biometric.BiometricFormView.as_view(),
+        name="biometric-device-add",
+    ),
+    path(
+        "biometric-device-edit/<uuid:pk>/",
+        biometric.BiometricFormView.as_view(),
+        name="biometric-device-edit",
+    ),
+    path(
+        "biometric-card-view/",
+        biometric.BiometricCardView.as_view(),
+        name="biometric-card-view",
+    ),
+    path(
+        "biometric-navbar/",
+        biometric.BiometricNavBar.as_view(),
+        name="biometric-navbar",
+    ),
+    path(
+        "biometric-device-schedule/<uuid:pk>/",
+        biometric.BiometricSheduleForm.as_view(),
+        name="biometric-device-schedule",
+    ),
     path(
         "view-biometric-devices/",
         views.biometric_devices_view,
@@ -27,11 +54,11 @@ urlpatterns = [
         views.biometric_device_live,
         name="biometric-device-live-capture",
     ),
-    path(
-        "biometric-device-schedule/<uuid:device_id>/",
-        views.biometric_device_schedule,
-        name="biometric-device-schedule",
-    ),
+    # path(
+    #     "biometric-device-schedule/<uuid:device_id>/",
+    #     views.biometric_device_schedule,
+    #     name="biometric-device-schedule",
+    # ),
     path(
         "biometric-device-unschedule/<uuid:device_id>/",
         views.biometric_device_unschedule,
@@ -41,6 +68,11 @@ urlpatterns = [
         "biometric-device-test/<uuid:device_id>/",
         views.biometric_device_test,
         name="biometric-device-test",
+    ),
+    path(
+        "biometric-device-fetch-logs/<uuid:device_id>/",
+        views.biometric_device_fetch_logs,
+        name="biometric-device-fetch-logs",
     ),
     path(
         "biometric-device-add",
@@ -79,9 +111,44 @@ urlpatterns = [
         name="search-employee-in-device",
     ),
     path(
+        "find-employee-badge-id",
+        views.find_employee_badge_id,
+        name="find-employee-badge-id",
+    ),
+    path(
         "add-biometric-user/<uuid:device_id>/",
         views.add_biometric_user,
         name="add-biometric-user",
+    ),
+    path(
+        "map-biometric-users/<uuid:device_id>/",
+        views.map_biometric_users,
+        name="map-biometric-users",
+    ),
+    path(
+        "add-dahua-biometric-user/<uuid:device_id>/",
+        views.add_dahua_biometric_user,
+        name="add-dahua-biometric-user",
+    ),
+    path(
+        "delete-dahua-user/<uuid:obj_id>",
+        views.delete_dahua_user,
+        name="delete-dahua-user",
+    ),
+    path(
+        "delete-dahua-user",
+        views.delete_dahua_user,
+        name="delete-dahua-user",
+    ),
+    path(
+        "delete-etimeoffice-user",
+        views.delete_etimeoffice_user,
+        name="delete-etimeoffice-user",
+    ),
+    path(
+        "delete-etimeoffice-user/<uuid:obj_id>",
+        views.delete_etimeoffice_user,
+        name="delete-etimeoffice-user",
     ),
     path(
         "enable-cosec-face-recognition/<str:user_id>/<uuid:device_id>/",
